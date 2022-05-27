@@ -5,8 +5,6 @@ from qiskit import QuantumCircuit, Aer, execute
 from qiskit import QuantumRegister, ClassicalRegister
 import qiskit.providers.aer as qpa
 
-from itertools import chain, combinations
-
 
 class QuantumPartonShower:
     '''
@@ -23,7 +21,15 @@ class QuantumPartonShower:
         
         Gates: OrderedDict([('x', 20), ('cu3', 8), ('measure', 5), ('reset', 3), ('cry', 3), ('cx', 2), ('ry', 1), ('h', 1), ('u3', 1)])
     
+    Params:
+        g_1  (float) type-1 fermion coupling
+        g_2  (float) type-2 fermion coupling
+        g_12 (float) mixed fermion coupling
+        eps  (float) scale parameter
+
     Class attributes:
+        g_1, g_2, g_12, eps
+
         N        (int)             number of simulation steps
         ni       (int)             number of initial particles
         L        (int)             ceil(log2(N+ni))
@@ -41,11 +47,23 @@ class QuantumPartonShower:
         w_aReg   (QuantumRegister) ancillary reg. for Ucount
         circuit  (QuantumCircuit)  that implements QPS
     '''
-    def __init__(self):
+    def __init__(self, g_1, g_2, g_12, eps):
         self._N = 2
         self._ni = 1
-        #self._L = int(math.floor(math.log(self._N + self._ni, 2)) + 1)
+        self.g_1= g_1
+        self.g_2= g_2
+        self.g_12= g_12
+        self.eps= eps
+
+        # Derived params
         self._L = int(math.ceil(math.log(self._N + self._ni, 2)))
+
+        gp = math.sqrt(abs((g_1 - g_2) ** 2 + 4 * g_12 ** 2))
+        if g_1 > g_2:
+            gp = -gp
+        self.g_a= (g_1 + g_2 - gp) / 2
+        self.g_b= (g_1 + g_2 + gp) / 2
+        self.u = math.sqrt(abs((gp + g_1 - g_2) / (2 * gp)))
         
         # Define these variables for indexing - to convert from cirq's grid qubits (see explaination in notebook)
         self._p_len = 3
@@ -62,7 +80,8 @@ class QuantumPartonShower:
         tot_qubits= 3*(self._N + self._ni) + self._L + 1
         return "N= %d \n ni= %d \n L= %d \n Total qubits: %d" %(self._N, self._ni, self._L, tot_qubits)
 
-    def ptype(self, x):
+    @staticmethod
+    def ptype(x):
         ''' Parses particle type, from binary string to descriptive string. '''
         if x=='000':
             return '0'
@@ -103,7 +122,7 @@ class QuantumPartonShower:
         return math.exp(self.P_bos(t, g_a, g_b))
 
 
-    def populateParameterLists(self, g_a, g_b, eps):
+    def populateParameterLists(self):
         '''
         Populates the 6 parameter lists -- 3 splitting functions, 3 Sudakov factors -- 
         with correct values for each time step theta.
@@ -125,15 +144,15 @@ class QuantumPartonShower:
         timeStepList, P_aList, P_bList, P_phiList, Delta_aList, Delta_bList, Delta_phiList= [], [], [], [], [], [], []
         for i in range(self._N):
             # Compute time steps
-            t_up = eps ** ((i) / self._N)
-            t_mid = eps ** ((i + 0.5) / self._N)
-            t_low = eps ** ((i + 1) / self._N)
+            t_up = self.eps ** ((i) / self._N)
+            t_mid = self.eps ** ((i + 0.5) / self._N)
+            t_low = self.eps ** ((i + 1) / self._N)
             timeStepList.append(t_mid)
             # Compute values for emission matrices
-            Delta_a = self.Delta_f(t_low, g_a) / self.Delta_f(t_up, g_a)
-            Delta_b = self.Delta_f(t_low, g_b) / self.Delta_f(t_up, g_b)
-            Delta_phi = self.Delta_bos(t_low, g_a, g_b) / self.Delta_bos(t_up, g_a, g_b)
-            P_a, P_b, P_phi = self.P_f(t_mid, g_a), self.P_f(t_mid, g_b), self.P_bos(t_mid, g_a, g_b)
+            Delta_a = self.Delta_f(t_low, self.g_a) / self.Delta_f(t_up, self.g_a)
+            Delta_b = self.Delta_f(t_low, self.g_b) / self.Delta_f(t_up, self.g_b)
+            Delta_phi = self.Delta_bos(t_low, self.g_a, self.g_b) / self.Delta_bos(t_up, self.g_a, self.g_b)
+            P_a, P_b, P_phi = self.P_f(t_mid, self.g_a), self.P_f(t_mid, self.g_b), self.P_bos(t_mid, self.g_a, self.g_b)
 
             # Add them to the list
             P_aList.append(P_a)
@@ -178,11 +197,7 @@ class QuantumPartonShower:
                     self._circuit.x(self.pReg[currentParticleIndex * self._p_len + pBit])
 
 
-
-
-
-
-    def createCircuit(self, eps, g_1, g_2, g_12, initialParticles, verbose=False):
+    def createCircuit(self, initialParticles, verbose=False):
         '''
         This is the main function to create a quantum circuit that implements a 2-step QPS with mid-circuit measurements. 
         The circuit is constructed in place (self._circuit), and also returned.
@@ -198,19 +213,12 @@ class QuantumPartonShower:
         Returns:
             a tuple: QPS circuit (QuantumCircuit), qubit dict (dict)
         '''
-        # calculate constants
-        gp = math.sqrt(abs((g_1 - g_2) ** 2 + 4 * g_12 ** 2))
-        if g_1 > g_2:
-            gp = -gp
-        g_a, g_b = (g_1 + g_2 - gp) / 2, (g_1 + g_2 + gp) / 2
-        u = math.sqrt(abs((gp + g_1 - g_2) / (2 * gp)))
-
         # evaluate P(Theta) and Delta(Theta) at every time step
-        self.populateParameterLists(g_a, g_b, eps)
+        self.populateParameterLists()
 
         if verbose:
             print('Classical parameters: \n')
-            print('g_a= %.4f, g_b= %.4f, u= %.4f' %(g_a, g_b, u))
+            print('g_a= %.4f, g_b= %.4f, u= %.4f' %(self.g_a, self.g_b, self.u))
             print('Delta_aList: ' + str(Delta_aList))
             print('Delta_bList: ' + str(Delta_bList))
             print('Delta_phiList: ' + str(Delta_phiList))
@@ -234,7 +242,7 @@ class QuantumPartonShower:
         print('Applying step 1.')
 
         # R^(m) - rotate every particle p_k from 1,2 to a,b basis (step 1)
-        self._circuit.ry((2 * math.asin(-u)), self.pReg[0])
+        self._circuit.ry((2 * math.asin(-self.u)), self.pReg[0])
 
         # assess if emmision occured (step 3)
         if verbose:
@@ -307,9 +315,9 @@ class QuantumPartonShower:
             # Over p0
             t_mid= self.timeStepList[1]
             entry_h_a = 0
-            entry_h_aphi = math.sqrt(1-(self.P_f(t_mid, g_a)/(self.P_f(t_mid, g_a) + self.P_bos(t_mid, g_a, g_b)))) #off diagonals in A23
+            entry_h_aphi = math.sqrt(1-(self.P_f(t_mid, self.g_a)/(self.P_f(t_mid, self.g_a) + self.P_bos(t_mid, self.g_a, self.g_b)))) #off diagonals in A23
             entry_h_b = 0
-            entry_h_bphi = math.sqrt(1-(self.P_f(t_mid, g_b)/(self.P_f(t_mid, g_b) + self.P_bos(t_mid, g_a, g_b))))
+            entry_h_bphi = math.sqrt(1-(self.P_f(t_mid, self.g_b)/(self.P_f(t_mid, self.g_b) + self.P_bos(t_mid, self.g_a, self.g_b))))
 
             self._circuit.x(self.pReg[0])
             #########################################################################################################
@@ -353,7 +361,7 @@ class QuantumPartonShower:
             self._circuit.x(self.pReg[5]).c_if(self.hReg_cl[1], 4)
 
             self._circuit.h(self.pReg[7]).c_if(self.hReg_cl[1], 4)
-            entry_r = g_a / (math.sqrt(g_a*g_a + g_b*g_b))
+            entry_r = self.g_a / (math.sqrt(self.g_a*self.g_a + self.g_b*self.g_b))
 
             self._circuit.u3(2*np.arccos(entry_r), 0, 0, self.pReg[6]).c_if(self.hReg_cl[1], 4)
             self._circuit.x(self.pReg[7])
@@ -367,7 +375,7 @@ class QuantumPartonShower:
         index2 = 0
         while index2 < self.pReg.size:
             # circuit.append(ry(2*math.asin(u)).controlled().on(p_k[2], p_k[0]))
-            self._circuit.cry((2 * math.asin(u)), self.pReg[index2 + 2], self.pReg[index2 + 0])
+            self._circuit.cry((2 * math.asin(self.u)), self.pReg[index2 + 2], self.pReg[index2 + 0])
             index2 += self._p_len
 
         print('Done.\n')
@@ -442,111 +450,3 @@ class QuantumPartonShower:
             return statevector
         else:
             print("choose 'qasm' or 'statevector'")
-
-
-
-
-
-
-
-
-
-
-    def MCMC(self, eps, g_a, g_b, na_i, nb_i, verbose=False):
-        '''
-        na_i, nb_i are the initial number of a and b fermions.
-
-        '''
-
-        n_a= na_i
-        n_b= nb_i
-        n_phi= 0
-
-        n_emits= 0
-
-        for i in range(self._N):
-            # Compute time steps
-            t_up = eps ** ((i) / self._N)
-            t_mid = eps ** ((i + 0.5) / self._N)
-            t_low = eps ** ((i + 1) / self._N)
-            # Compute values for emission matrices
-            Delta_a = self.Delta_f(t_low, g_a) / self.Delta_f(t_up, g_a)
-            Delta_b = self.Delta_f(t_low, g_b) / self.Delta_f(t_up, g_b)
-            Delta_phi = self.Delta_bos(t_low, g_a, g_b) / self.Delta_bos(t_up, g_a, g_b)
-            P_a, P_b, P_phi = self.P_f(t_mid, g_a), self.P_f(t_mid, g_b), self.P_bos(t_mid, g_a, g_b)
-
-            P_phi_a= self.P_bos_g(t_mid, g_a)
-            P_phi_b= self.P_bos_g(t_mid, g_b)
-
-            Pemit= 1 - (Delta_a ** n_a) * (Delta_b ** n_b) * (Delta_phi ** n_phi)
-
-            denom= (P_a * n_a) + (P_b * n_b) + (P_phi * n_phi)
-            emit_a= (P_a * n_a) / denom
-            emit_b= (P_b * n_b) / denom
-            emit_phi= (P_phi * n_phi) / denom # = emit_phi_a + emit_phi_b
-            emit_phi_a= (P_phi_a * n_phi) / denom
-            emit_phi_b= (P_phi_b * n_phi) / denom 
-
-            emit_a *= Pemit
-            emit_b *= Pemit
-            emit_phi*= Pemit
-            emit_phi_a *= Pemit
-            emit_phi_b *= Pemit
-
-            cut_a= emit_a
-            cut_b= cut_a + emit_b
-            cut_phi_a= cut_b + emit_phi_a
-            cut_phi_b= cut_phi_a + emit_phi_b
-
-            r= np.random.uniform(0, 1)
-
-            if r < cut_a:
-                n_phi+= 1
-            elif r < cut_b:
-                n_phi+= 1
-            elif r < cut_phi_a:
-                n_phi-= 1
-                n_a+= 2
-            elif r < cut_phi_b:
-                n_phi-= 1
-                n_b+= 2
-            else: 
-                n_emits-= 1
-            n_emits+= 1
-
-            if verbose:
-                print('\n\nDelta_a: ' + str(Delta_a))
-                print('Delta_b: ' + str(Delta_b))
-                print('Delta_phi: ' + str(Delta_phi))
-                print('P_a: ' + str(P_a))
-                print('P_b: ' + str(P_b))
-                print('P_phi_a: ' + str(P_phi_a))
-                print('P_phi_b: ' + str(P_phi_b))
-                print('P_phi: ' + str(P_phi))
-                print('t_mid: ' + str(t_mid))
-
-                print('\nStep %d' %(i+1))
-                print('P(emit a)= ' + str(emit_a))
-                print('P(emit b)= ' + str(emit_b))
-                print('P(emit phi -> aa)= ' + str(emit_phi_a))
-                print('P(emit phi -> bb)= ' + str(emit_phi_b))
-                print('P(emit phi)= ' + str(emit_phi))
-                print('P(no emit)= ' + str(1 - Pemit))
-        
-        #print('\nNumber of emissions: %d' %(n_emits))
-        return n_emits, n_a, n_b, n_phi
-
-    def P(self, g):
-        alpha = g**2 / (4 * math.pi)
-        return alpha
-
-    def Delta(self, lnt, g):
-        alpha = g**2 / (4 * math.pi)
-        return math.exp(alpha * lnt)
-
-    # The analytical distribution of the hardest emission
-    def dsigma_d_t_max(self, lnt, lneps, g, normalized=False):
-        if normalized: # Normalized to -log(θmax), i.e. "conditionally" normalized on emission occuring
-            return self.P(g) * self.Delta(lnt, g) / (1 - self.Delta(lneps, g))
-        else: # Normalized to -infinity, i.e. this gives the actual probabilities --> use this for plotting
-            return self.P(g) * self.Delta(lnt, g)

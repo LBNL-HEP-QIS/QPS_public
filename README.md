@@ -2,24 +2,20 @@
 
 Particles produced in high energy collisions that are charged under one of the fundamental forces will radiate proportionally to their charge, such as photon radiation from electrons in quantum electrodynamics. At sufficiently high energies, this radiation pattern is enhanced collinear to the initiating particle, resulting in a complex, many-body quantum system. Classical Markov Chain Monte Carlo simulation approaches work well to capture many of the salient features of the shower of radiation, but cannot capture all quantum effects. We show how quantum algorithms are well-suited for describing the quantum properties of final state radiation. In particular, we develop a polynomial time quantum final state shower that accurately models the effects of intermediate spin states similar to those present in high energy electroweak showers. The algorithm is explicitly demonstrated for a simplified quantum field theory on a quantum computer.
 
-Details can be found in [1904.03196 [quant-ph]](https://arxiv.org/abs/1904.03196).
+Details can be found in [1904.03196 [quant-ph]](https://arxiv.org/abs/1904.03196). 
 
+The Jupyter notebooks in this directory serve as examples of how to use the QPS code.
 
-# File Directories:
-The files are organized into several different directories:
-* cirq_code
-    * contains all files that import `cirq`
-* qiskit_code
-    * contains all files that import `qiskit` and not `cirq`
-* plots
-    * contains all plots used in `arxiv:2203.10018`
-* data
-    * contains qiskit simulation and classical MCMC data
-* qiskit_legacy
-    * contains QuantumPartonShower.py, before Plato made some adjustments
-* qiskit_legacy/PaperPlots
-    * contains Ben's original code used for `arxiv:1904.03196`
-
+## System Requirements
+The standard Anaconda3 installation plus Qiskit is mostly sufficient. The code in this directory uses the following packages:
+* math, numpy, matplotlib
+* qiskit
+    * qiskit-terra:         0.19.2
+    * qiskit-aer:           0.10.3
+    * qiskit-ignis:         0.7.0
+    * qiskit-ibmq-provider: 0.18.3
+    * qiskit-aqua:          0.9.5
+    * qiskit:               0.34.2
 
 ## Table of Contents:
 * `plotting.py`
@@ -53,6 +49,16 @@ The files are organized into several different directories:
     * Probability distribution (with errors) of θmax for an N-step QPS simulation
 
 ### data/
+The data included consists of various numpy files. Qiskit simulations for the following parameter combinations are included:
+* one initial f1, g12= 0
+* one initial f1, g12= 1
+* one initial f2, g12= 0
+* one initial f2, g12= 1
+The default for Qiskit simulations is 1e5 shots. 
+
+Also, classical MCMC data is included for g12=0, as well as analytical θmax distributions.
+
+The files are labeled as follows:
 * `counts_Nstep_*.npy`           &larr;  QPS_Paper_Plots.ipynb
     * QPS with mid-circuit meas. simulation counts
 * `counts_OLD_Nstep_*.npy`       &larr;  QPS_Paper_Plots.ipynb

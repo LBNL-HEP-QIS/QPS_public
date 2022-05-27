@@ -20,17 +20,24 @@ class QuantumPartonShower_MCM:
     cannot currently be implemetned in Qiskit. Thus, the particle registers still use 3 qubits.
 
     Params:
-        N  (int): number of steps
-        ni (int): number of initial particles
-    
+        N    (int)   number of steps
+        ni   (int)   number of initial particles
+        g_1  (float) type-1 fermion coupling
+        g_2  (float) type-2 fermion coupling
+        g_12 (float) mixed fermion coupling
+        eps  (float) scale parameter
+
     Class attributes:
-        N        (int)             number of simulation steps
-        ni       (int)             number of initial particles
-        L        (int)             ceil(log2(N+ni))
-        p_len    (int)             number of qubits per particle
-        h_len    (int)             number of qubits for each history step
-        e_len    (int)             number of qubits in the emission register
-        w_len    (int)             number of qubits in the main ancillary register
+        N, ni, g_1, g_2, g_12, eps
+
+        L        (int)   ceil(log2(N+ni))
+        g_a      (float) a-type fermion coupling (eq. 6)
+        g_b      (float) b-type fermion coupling (eq. 6)
+        u        (float) rotation angle for diagonalization (eq. 7)
+        p_len    (int)   number of qubits per particle
+        h_len    (int)   number of qubits for each history step
+        e_len    (int)   number of qubits in the emission register
+        w_len    (int)   number of qubits in the main ancillary register
 
         pReg     (QuantumRegister) particle register
         hReg     (QuantumRegister) history register
@@ -41,10 +48,23 @@ class QuantumPartonShower_MCM:
         w_aReg   (QuantumRegister) ancillary reg. for Ucount
         circuit  (QuantumCircuit)  that implements QPS
     '''
-    def __init__(self, N, ni):
-        self._N = N
-        self._ni = ni
-        self._L = int(math.ceil(math.log(N + ni, 2)))
+    def __init__(self, N, ni, g_1, g_2, g_12, eps):
+        self._N= N
+        self._ni= ni
+        self.g_1= g_1
+        self.g_2= g_2
+        self.g_12= g_12
+        self.eps= eps
+
+        # Derived params
+        self._L= int(math.ceil(math.log(N + ni, 2)))
+        
+        gp = math.sqrt(abs((g_1 - g_2) ** 2 + 4 * g_12 ** 2))
+        if g_1 > g_2:
+            gp = -gp
+        self.g_a= (g_1 + g_2 - gp) / 2
+        self.g_b= (g_1 + g_2 + gp) / 2
+        self.u = math.sqrt(abs((gp + g_1 - g_2) / (2 * gp)))
 
         # Define some register lengths
         self._p_len = 3
@@ -58,7 +78,8 @@ class QuantumPartonShower_MCM:
         self._circuit = QuantumCircuit(self.wReg, self.pReg, self.hReg, self.eReg, self.n_aReg,
                                        self.w_hReg, self.w_aReg)
 
-    def ptype(self, x):
+    @staticmethod
+    def ptype(x):
         ''' Parses particle type, from binary string to descriptive string. '''
         if x=='000':
             return '0'
@@ -96,15 +117,10 @@ class QuantumPartonShower_MCM:
         return math.exp(self.P_bos(t, g_a, g_b))
 
 
-    def populateParameterLists(self, g_a, g_b, eps):
+    def populateParameterLists(self):
         '''
         Populates the 6 parameter lists -- 3 splitting functions, 3 Sudakov factors -- 
         with correct values for each time step theta.
-
-        Params:
-            g_a           (float)       a-coupling
-            g_b           (float)       b-coupling
-            eps           (float)       discretization parameter
             
         Sets the following attributes:
             timeStepList  (List(float)) scale / opening angle array
@@ -118,15 +134,15 @@ class QuantumPartonShower_MCM:
         timeStepList, P_aList, P_bList, P_phiList, Delta_aList, Delta_bList, Delta_phiList= [], [], [], [], [], [], []
         for i in range(self._N):
             # Compute time steps
-            t_up = eps ** ((i) / self._N)
-            t_mid = eps ** ((i + 0.5) / self._N)
-            t_low = eps ** ((i + 1) / self._N)
+            t_up = self.eps ** ((i) / self._N)
+            t_mid = self.eps ** ((i + 0.5) / self._N)
+            t_low = self.eps ** ((i + 1) / self._N)
             timeStepList.append(t_mid)
             # Compute values for emission matrices
-            Delta_a = self.Delta_f(t_low, g_a) / self.Delta_f(t_up, g_a)
-            Delta_b = self.Delta_f(t_low, g_b) / self.Delta_f(t_up, g_b)
-            Delta_phi = self.Delta_bos(t_low, g_a, g_b) / self.Delta_bos(t_up, g_a, g_b)
-            P_a, P_b, P_phi = self.P_f(t_mid, g_a), self.P_f(t_mid, g_b), self.P_bos(t_mid, g_a, g_b)
+            Delta_a = self.Delta_f(t_low, self.g_a) / self.Delta_f(t_up, self.g_a)
+            Delta_b = self.Delta_f(t_low, self.g_b) / self.Delta_f(t_up, self.g_b)
+            Delta_phi = self.Delta_bos(t_low, self.g_a, self.g_b) / self.Delta_bos(t_up, self.g_a, self.g_b)
+            P_a, P_b, P_phi = self.P_f(t_mid, self.g_a), self.P_f(t_mid, self.g_b), self.P_bos(t_mid, self.g_a, self.g_b)
 
             # Add them to the list
             P_aList.append(P_a)
@@ -716,15 +732,13 @@ class QuantumPartonShower_MCM:
         self.numberControlT(l, 0, self.hReg, self.w_hReg)
 
 
-    def U_p(self, l, m, g_a, g_b):
+    def U_p(self, l, m):
         '''
         Constructs and applies a quantum circuit that implements U_p.
 
         Params:
             l   (int)   size of the counting & history registers
             m   (int)   iteration
-            g_a (float) a-type coupling
-            g_b (float) b-type coupling
         '''
         for k in range(0, self._ni + m):
             pk0= k * self._p_len # particle k first (zero) index
@@ -758,7 +772,7 @@ class QuantumPartonShower_MCM:
 
                 # fourth and fifth gate in paper (then undoes work register)
                 self._circuit.ch(self.pReg[pNew + 2], self.pReg[pNew + 1]).c_if(self.hReg_cl, h)
-                angle = (2 * np.arccos(g_a / np.sqrt(g_a ** 2 + g_b ** 2)))
+                angle = (2 * np.arccos(self.g_a / np.sqrt(self.g_a ** 2 + self.g_b ** 2)))
                 self._circuit.cry(angle, self.pReg[pNew + 2], self.pReg[pNew + 0]).c_if(self.hReg_cl, h)
 
                 # sixth and seventh gate in paper (then undoes work register)
@@ -774,31 +788,21 @@ class QuantumPartonShower_MCM:
                 self._circuit.x(self.pReg[pNew + 1]).c_if(self.hReg_cl, h)
 
 
-    def createCircuit(self, eps, g_1, g_2, g_12, initialParticles, verbose=False):
+    def createCircuit(self, initialParticles, verbose=False):
         '''
         This is the main function to create a quantum circuit that implements QPS. 
         The circuit is constructed in place (self._circuit), and also returned.
 
         Params:
-            eps              (float)     scale parameter
-            g_1              (float)     type-1 fermion coupling
-            g_2              (float)     type-2 fermion coupling
-            g_12             (float)     mixed fermion coupling
             initialParticles (List(str)) list of initial particles, each represented by its binary string: 'MSB, middle bit, LSB'
             verbose          (bool)      whether to print out useful info while constructing the circuit
 
         Returns:
             a tuple: QPS circuit (QuantumCircuit), qubit dict (dict)
         '''
-        # calculate constants
-        gp = math.sqrt(abs((g_1 - g_2) ** 2 + 4 * g_12 ** 2))
-        if g_1 > g_2:
-            gp = -gp
-        g_a, g_b = (g_1 + g_2 - gp) / 2, (g_1 + g_2 + gp) / 2
-        u = math.sqrt(abs((gp + g_1 - g_2) / (2 * gp)))
 
         # evaluate P(Theta) and Delta(Theta) at every time step
-        self.populateParameterLists(g_a, g_b, eps)
+        self.populateParameterLists()
 
         qubits = {'pReg': self.pReg, 'hReg': self.hReg, 'w_hReg': self.w_hReg, 'eReg': self.eReg, 'wReg': self.wReg,
                   'n_aReg': self.n_aReg, 'w_aReg': self.w_aReg}
@@ -818,7 +822,7 @@ class QuantumPartonShower_MCM:
             # R^(m) - rotate every particle p_k from 1,2 to a,b basis (step 1)
             index = 0
             while index < self.pReg.size:
-                self._circuit.cry((2 * math.asin(-u)), self.pReg[index + 2], self.pReg[index + 0])
+                self._circuit.cry((2 * math.asin(-self.u)), self.pReg[index + 2], self.pReg[index + 0])
                 index += self._p_len
 
             # populate count register (step 2)
@@ -843,12 +847,12 @@ class QuantumPartonShower_MCM:
             if verbose:
                 print('Apply U_p()...')
             # update particle based on which particle split/emmitted (step 5)
-            self.U_p(l, m, g_a, g_b)
+            self.U_p(l, m)
 
             # R^-(m) rotate every particle p_k from a,b to 1,2 basis (step 6)
             index2 = 0
             while index2 < self.pReg.size:
-                self._circuit.cry((2 * math.asin(u)), self.pReg[index2 + 2], self.pReg[index2 + 0])
+                self._circuit.cry((2 * math.asin(self.u)), self.pReg[index2 + 2], self.pReg[index2 + 0])
                 index2 += self._p_len
 
         if verbose:

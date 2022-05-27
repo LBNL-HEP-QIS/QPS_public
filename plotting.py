@@ -109,7 +109,6 @@ def master_plot_emissions(eps, g1, g2, N, ni, events, counts, counts2, mcmc= Non
             #emOld_ey[emit_N]+= countsOld[c]**0.5/events # OLD ERROR
 
         emOld_ey= (emOld_y / events)**0.5
-        print('new errors:' + str(emOld_ey))
 
         ax1.bar(np.arange(0, N+1, 1), emOld_y, alpha=1.0, edgecolor = 'red', color='none', width= 1., linewidth=1.4, 
                 label=label[5], tick_label= ['']*(N+1), zorder=10)
@@ -141,7 +140,6 @@ def master_plot_emissions(eps, g1, g2, N, ni, events, counts, counts2, mcmc= Non
         ymax= max(0.65, max(emissions_y), max(emissions2_y))
     yceil= math.ceil(10*ymax) / 10. + 0.01
     plt.ylim(0, yceil)
-    print('ymax= ' + str(ymax))
     label_format = '{:,.1f}'
     ax1.set_yticks(np.arange(0, yceil, 0.1))
     ax1.set_yticklabels([label_format.format(x) for x in np.arange(0, yceil, 0.1)], size=32, fontname= 'times new roman')
@@ -379,15 +377,15 @@ def master_plot_thetamax(eps, g1, g2, N, ni, events, counts, counts2, analytical
 
     # Scale the y-axis. The upper limit is the next closest 0.1 tick.
     if old_alg != None:
-        ymax= max(0.5, max(tmOld2_y), max(tmOld_y), max(tm_y), max(tm2_y))
+        ymax= max(max(tmOld2_y), max(tmOld_y), max(tm_y), max(tm2_y))
     else:
-        ymax= max(0.5, max(tm_y), max(tm2_y))
+        ymax= max(max(tm_y), max(tm2_y))
     if normalized:
-        ymax= max(0.5, ymax/dx)
+        ymax/= dx
 
+    ymax+= 0.2
     yceil= math.ceil(10*ymax) / 10. + 0.01
     plt.ylim(0, yceil)
-    print('ymax= ' + str(ymax))
     label_format = '{:,.1f}'
     ax1.set_yticks(np.arange(0, yceil, 0.1))
     ax1.set_yticklabels([label_format.format(x) for x in np.arange(0, yceil, 0.1)], size=32, fontname= 'times new roman')
@@ -421,7 +419,6 @@ def master_plot_thetamax(eps, g1, g2, N, ni, events, counts, counts2, analytical
         if np.size(endArray) == 0:
             mcmc[N-j-1]= np.sum(analytical[1][start:])
         else:
-            print(start, endArray[0])
             mcmc[N-j-1]= np.sum(analytical[1][start:endArray[0]])
 
     mcmc/= np.size(analytical[1]) / N

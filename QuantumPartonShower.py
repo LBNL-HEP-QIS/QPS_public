@@ -11,15 +11,22 @@ class QuantumPartonShower:
     A class for executing the Quantum Parton Shower (QPS) algorithm.
 
     Params:
-        N  (int): number of steps
-        ni (int): number of initial particles
+        N    (int)   number of steps
+        ni   (int)   number of initial particles
+        g_1  (float) type-1 fermion coupling
+        g_2  (float) type-2 fermion coupling
+        g_12 (float) mixed fermion coupling
+        eps  (float) scale parameter
     
     Class attributes:
-        N        (int)             number of simulation steps
-        ni       (int)             number of initial particles
-        L        (int)             ceil(log2(N+ni))
-        p_len    (int)             number of qubits per particle
-        h_len    (int)             number of qubits for each history step
+        N, ni, g_1, g_2, g_12, eps
+
+        L        (int)   ceil(log2(N+ni))
+        g_a      (float) a-type fermion coupling (eq. 6)
+        g_b      (float) b-type fermion coupling (eq. 6)
+        u        (float) rotation angle for diagonalization (eq. 7)
+        p_len    (int)   number of qubits per particle
+        h_len    (int)   number of qubits for each history step
              
         pReg     (QuantumRegister) particle register
         hReg     (QuantumRegister) history register
@@ -34,10 +41,23 @@ class QuantumPartonShower:
         w_phiReg (QuantumRegister) ancillary
         circuit  (QuantumCircuit)  that implements QPS
     '''
-    def __init__(self, N, ni):
+    def __init__(self, N, ni, g_1, g_2, g_12, eps):
         self._N = N
         self._ni = ni
-        self._L = int(math.ceil(math.log(N + ni, 2)))
+        self.g_1= g_1
+        self.g_2= g_2
+        self.g_12= g_12
+        self.eps= eps
+
+        # Derived params
+        self._L= int(math.ceil(math.log(N + ni, 2)))
+        
+        gp = math.sqrt(abs((g_1 - g_2) ** 2 + 4 * g_12 ** 2))
+        if g_1 > g_2:
+            gp = -gp
+        self.g_a= (g_1 + g_2 - gp) / 2
+        self.g_b= (g_1 + g_2 + gp) / 2
+        self.u = math.sqrt(abs((gp + g_1 - g_2) / (2 * gp)))
 
         # Define some register lengths
         self._p_len = 3
@@ -53,7 +73,8 @@ class QuantumPartonShower:
                                        self.n_bReg, self.w_hReg, self.w_phiReg, self.w_aReg, self.w_bReg)
 
 
-    def ptype(self, x):
+    @staticmethod
+    def ptype(x):
         ''' Parses particle type, from binary string to descriptive string. '''
         if x=='000':
             return '0'    
@@ -90,7 +111,7 @@ class QuantumPartonShower:
     def Delta_bos(self, t, g_a, g_b):
         return math.exp(self.P_bos(t, g_a, g_b))
 
-    def populateParameterLists(self, g_a, g_b, eps):
+    def populateParameterLists(self):
         '''
         Populates the 6 parameter lists -- 3 splitting functions, 3 Sudakov factors -- 
         with correct values for each time step theta.
@@ -112,15 +133,15 @@ class QuantumPartonShower:
         timeStepList, P_aList, P_bList, P_phiList, Delta_aList, Delta_bList, Delta_phiList= [], [], [], [], [], [], []
         for i in range(self._N):
             # Compute time steps
-            t_up = eps ** ((i) / self._N)
-            t_mid = eps ** ((i + 0.5) / self._N)
-            t_low = eps ** ((i + 1) / self._N)
+            t_up = self.eps ** ((i) / self._N)
+            t_mid = self.eps ** ((i + 0.5) / self._N)
+            t_low = self.eps ** ((i + 1) / self._N)
             timeStepList.append(t_mid)
             # Compute values for emission matrices
-            Delta_a = self.Delta_f(t_low, g_a) / self.Delta_f(t_up, g_a)
-            Delta_b = self.Delta_f(t_low, g_b) / self.Delta_f(t_up, g_b)
-            Delta_phi = self.Delta_bos(t_low, g_a, g_b) / self.Delta_bos(t_up, g_a, g_b)
-            P_a, P_b, P_phi = self.P_f(t_mid, g_a), self.P_f(t_mid, g_b), self.P_bos(t_mid, g_a, g_b)
+            Delta_a = self.Delta_f(t_low, self.g_a) / self.Delta_f(t_up, self.g_a)
+            Delta_b = self.Delta_f(t_low, self.g_b) / self.Delta_f(t_up, self.g_b)
+            Delta_phi = self.Delta_bos(t_low, self.g_a, self.g_b) / self.Delta_bos(t_up, self.g_a, self.g_b)
+            P_a, P_b, P_phi = self.P_f(t_mid, self.g_a), self.P_f(t_mid, self.g_b), self.P_bos(t_mid, self.g_a, self.g_b)
 
             # Add them to the list
             P_aList.append(P_a)
@@ -545,48 +566,7 @@ class QuantumPartonShower:
         #circuit.reset(eReg)
 
 
-    def updateParticles(self, l, m, k, controlQub, g_a, g_b):
-        """Updates particle if controlQub is on"""
-        # first gate in paper U_p
-        circuit.ccx(controlQub, self.pReg[k * self._p_len + 2], self.pReg[(self._ni + m) * self._p_len + 0])
-
-        # second gate in paper (undoes work register immediately)
-        circuit.x(self.pReg[k * self._p_len + 1])
-        circuit.x(self.pReg[k * self._p_len + 2])
-        circuit.ccx(controlQub, self.pReg[k * self._p_len + 2], self.wReg[0])
-        circuit.ccx(self.wReg[0], self.pReg[k * self._p_len + 1], self.wReg[1])
-        circuit.ccx(self.wReg[1], self.pReg[k * self._p_len + 0], self.pReg[(self._ni + m) * self._p_len + 2])
-        circuit.ccx(self.wReg[0], self.pReg[k * self._p_len + 1], self.wReg[1])
-        circuit.ccx(controlQub, self.pReg[k * self._p_len + 2], self.wReg[0])
-        circuit.x(self.pReg[k * self._p_len + 1])
-        circuit.x(self.pReg[k * self._p_len + 2])
-
-        # third gate in paper
-        circuit.ccx(controlQub, self.pReg[(self._ni + m) * self._p_len + 2], self.pReg[k * self._p_len + 2])
-
-        # fourth and fifth gate in paper (then undoes work register)
-        circuit.ccx(controlQub, self.pReg[(self._ni + m) * self._p_len + 2], self.wReg[0])
-
-        # check the format for the control state here
-        circuit.ch(self.wReg[0], self.pReg[(self._ni + m) * self._p_len + 1])
-        angle = (2 * np.arccos(g_a / np.sqrt(g_a ** 2 + g_b ** 2)))
-        circuit.cry(angle, self.wReg[0], self.pReg[(self._ni + m) * self._p_len + 0])
-        circuit.ccx(controlQub, self.pReg[(self._ni + m) * self._p_len + 2], self.wReg[0])
-
-        # sixth and seventh gate in paper (then undoes work register)
-        circuit.x(self.pReg[(self._ni + m) * self._p_len + 0])
-        circuit.x(self.pReg[(self._ni + m) * self._p_len + 1])
-        circuit.ccx(self.pReg[(self._ni + m) * self._p_len + 1], self.pReg[(self._ni + m) * self._p_len + 2], self.wReg[0])
-        circuit.ccx(controlQub, wReg[0], self.pReg[k * self._p_len + 1])
-        circuit.ccx(self.pReg[(self._ni + m) * self._p_len + 1], self.pReg[(self._ni + m) * self._p_len + 2], self.wReg[0])
-        circuit.ccx(self.pReg[(self._ni + m) * self._p_len + 0], self.pReg[(self._ni + m) * self._p_len + 2], self.wReg[0])
-        circuit.ccx(controlQub, self.wReg[0], self.pReg[k * self._p_len + 0])
-        circuit.ccx(self.pReg[(self._ni + m) * self._p_len + 0], self.pReg[(self._ni + m) * self._p_len + 2], self.wReg[0])
-        circuit.x(self.pReg[(self._ni + m) * self._p_len + 0])
-        circuit.x(self.pReg[(self._ni + m) * self._p_len + 1])
-
-
-    def U_p(self, l, m, g_a, g_b):
+    def U_p(self, l, m):
         '''
         Constructs and applies a quantum circuit that implements U_p.
 
@@ -623,7 +603,7 @@ class QuantumPartonShower:
 
             # check the format for the control state here
             self._circuit.ch(self.wReg[0], self.pReg[(self._ni + m) * self._p_len + 1])
-            angle = (2 * np.arccos(g_a / np.sqrt(g_a ** 2 + g_b ** 2)))
+            angle = (2 * np.arccos(self.g_a / np.sqrt(self.g_a ** 2 + self.g_b ** 2)))
             self._circuit.cry(angle, self.wReg[0], self.pReg[(self._ni + m) * self._p_len + 0])
             self._circuit.ccx(controlQub, self.pReg[(self._ni + m) * self._p_len + 2], self.wReg[0])
 
@@ -643,7 +623,7 @@ class QuantumPartonShower:
             self.numberControlT(l, k + 1, self.hReg[m*self._h_len : (m+1)*self._h_len], self.w_hReg)
 
 
-    def createCircuit(self, eps, g_1, g_2, g_12, initialParticles):
+    def createCircuit(self, initialParticles):
         '''
         This is the main function to create a quantum circuit that implements QPS. 
         The circuit is constructed in place (self._circuit), and also returned.
@@ -658,15 +638,8 @@ class QuantumPartonShower:
         Returns:
             a tuple: QPS circuit (QuantumCircuit), qubit dict (dict)
         '''
-        # calculate constants
-        gp = math.sqrt(abs((g_1 - g_2) ** 2 + 4 * g_12 ** 2))
-        if g_1 > g_2:
-            gp = -gp
-        g_a, g_b = (g_1 + g_2 - gp) / 2, (g_1 + g_2 + gp) / 2
-        u = math.sqrt(abs((gp + g_1 - g_2) / (2 * gp)))
-
         # evaluate P(Theta) and Delta(Theta) at every time step
-        self.populateParameterLists(g_a, g_b, eps)
+        self.populateParameterLists()
 
         qubits = {'pReg': self.pReg, 'hReg': self.hReg, 'w_hReg': self.w_hReg, 'eReg': self.eReg, 'wReg': self.wReg,
                   'n_aReg': self.n_aReg, 'w_aReg': self.w_aReg, 'n_bReg': self.n_bReg, 'w_bReg': self.w_bReg,
@@ -681,7 +654,7 @@ class QuantumPartonShower:
             # R^(m) - rotate every particle p_k from 1,2 to a,b basis (step 1)
             index = 0
             while index < self.pReg.size:
-                self._circuit.cry((2 * math.asin(-u)), self.pReg[index + 2], self.pReg[index + 0])
+                self._circuit.cry((2 * math.asin(-self.u)), self.pReg[index + 2], self.pReg[index + 0])
                 index += self._p_len
 
             # populate count register (step 2)
@@ -694,13 +667,13 @@ class QuantumPartonShower:
             self.U_h(l, m, self.P_phiList[m], self.P_aList[m], self.P_bList[m])
 
             # update particle based on which particle split/emmitted (step 5)
-            self.U_p(l, m, g_a, g_b)
+            self.U_p(l, m)
 
             # R^-(m) rotate every particle p_k from a,b to 1,2 basis (step 6)
             index2 = 0
             while index2 < self.pReg.size:
                 # circuit.append(ry(2*math.asin(u)).controlled().on(p_k[2], p_k[0]))
-                self._circuit.cry((2 * math.asin(u)), self.pReg[index2 + 2], self.pReg[index2 + 0])
+                self._circuit.cry((2 * math.asin(self.u)), self.pReg[index2 + 2], self.pReg[index2 + 0])
                 index2 += self._p_len
 
         print('generated circuit on', self._circuit.num_qubits, 'qubits')
